@@ -1,16 +1,19 @@
 import speech_recognition as sr
-import pyttsx3
 import os
 import smtplib
 import cv2
 import numpy as np
 import time
-print("Imported all libraries")
 from picamera2 import Picamera2
 import lgpio
 from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
 import torch
 from PIL import Image
+import socket
+import pickle
+
+client_socket = None
+server_socket = None
 
 # GPIO Setup for Ultrasonic Sensor
 TRIG_PIN = 4
@@ -144,6 +147,7 @@ def object_detection():
             if distance < 50:
                 cv2.putText(result, "WARNING: Object too close!", (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                speak("Warning: Object too close!")
         
         cv2.imshow("Object Detection", result)
         
@@ -153,10 +157,6 @@ def object_detection():
         time.sleep(0.05)
     
     cv2.destroyAllWindows()
-
-# Speech recognition and other helper functions
-recognizer = sr.Recognizer()
-engine = pyttsx3.init()
 
 PHOTO_DIR = 'captured_photos'
 os.makedirs(PHOTO_DIR, exist_ok=True)
@@ -180,29 +180,38 @@ def send_email(subject, body, to_email):
     finally:
         server.quit()
 
-def listen():
-    with sr.Microphone() as source:
-        print("Listening...")
-        recognizer.adjust_for_ambient_noise(source)
-        audio = recognizer.listen(source)
+def send_audio_text(text):
+    """Send text to be spoken on the Windows machine"""
     try:
-        print("Recognizing...")
-        query = recognizer.recognize_google(audio)
-        return query
-    except sr.UnknownValueError:
-        print("Sorry, I didn't get that.")
-        return ""
+        # Use the existing client socket
+        data = {"type": "speak", "text": text}
+        client_socket.send(pickle.dumps(data))
+    except Exception as e:
+        print(f"Error sending audio text: {e}")
 
 def speak(text):
-    engine.say(text)
-    engine.runAndWait()
+    """Send text to Windows for speech output"""
+    send_audio_text(text)
+    print(f"Speaking: {text}")
 
-def greet():
-    speak("Hello! How can I assist you today?")
+def listen():
+    """Listen for commands from Windows client"""
+    global client_socket
+    try:
+        data = client_socket.recv(4096)
+        if data:
+            text = pickle.loads(data)
+            print(f"Received text: {text}")
+            return text
+    except Exception as e:
+        print(f"Error receiving data: {e}")
+        return ""
+    return ""
 
 def save_photo():
     camera = setup_camera()
     frame = camera.capture_array()
+    camera.close()
     if frame is not None:
         photo_path = os.path.join(PHOTO_DIR, 'captured_photo.jpeg')
         cv2.imwrite(photo_path, frame)
@@ -210,9 +219,60 @@ def save_photo():
         return True
     return False
 
-def main():
+def cleanup_resources():
+    """Safely cleanup all resources"""
+    global client_socket, server_socket
+    
+    # Close GPIO
     try:
-        greet()
+        lgpio.gpiochip_close(h)
+    except Exception as e:
+        print(f"Error closing GPIO: {e}")
+    
+    # Close OpenCV windows
+    try:
+        cv2.destroyAllWindows()
+    except Exception as e:
+        print(f"Error closing OpenCV windows: {e}")
+    
+    # Close sockets
+    try:
+        if client_socket is not None:
+            client_socket.close()
+    except Exception as e:
+        print(f"Error closing client socket: {e}")
+    
+    try:
+        if server_socket is not None:
+            server_socket.close()
+    except Exception as e:
+        print(f"Error closing server socket: {e}")
+
+def setup_socket_server(port=12345):
+    """Setup socket server with proper error handling"""
+    global client_socket, server_socket
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind(('0.0.0.0', port))
+        server_socket.listen(1)
+        print(f"Waiting for connection on port {port}...")
+        client_socket, addr = server_socket.accept()
+        print(f"Connected to {addr}")
+        return True
+    except Exception as e:
+        print(f"Error setting up socket server: {e}")
+        if server_socket:
+            server_socket.close()
+        return False
+
+def main():
+    global client_socket, server_socket
+    try:
+        if not setup_socket_server():
+            print("Failed to setup socket server")
+            return
+            
+        speak("Hello! How can I assist you today?")
         while True:
             query = listen().lower()
             print(query)
@@ -240,9 +300,14 @@ def main():
                 
     except KeyboardInterrupt:
         print("\nProgram stopped by user")
+    except Exception as e:
+        print(f"An error occurred: {e}")
     finally:
-        lgpio.gpiochip_close(h)
-        cv2.destroyAllWindows()
+        cleanup_resources()
 
 if __name__ == "__main__":
     main()
+
+#audio bhi send karo
+#check if it can run the model again or not
+#change the color combination
