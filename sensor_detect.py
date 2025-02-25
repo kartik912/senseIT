@@ -133,6 +133,7 @@ def object_detection():
         frame = camera.capture_array()
         
         # Perform object detection
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result, objectInfo = getObjects(frame, 0.45, 0.2)
         
         # Measure distance
@@ -157,6 +158,7 @@ def object_detection():
         time.sleep(0.05)
     
     cv2.destroyAllWindows()
+    camera.close()
 
 PHOTO_DIR = 'captured_photos'
 os.makedirs(PHOTO_DIR, exist_ok=True)
