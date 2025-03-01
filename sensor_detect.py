@@ -11,7 +11,12 @@ import torch
 from PIL import Image
 import socket
 import pickle
-
+import google.generativeai as Genai
+import os
+import pyttsx3
+import markdown2
+from bs4 import BeautifulSoup
+import threading
 client_socket = None
 server_socket = None
 
@@ -125,13 +130,17 @@ def predict_step(image_paths):
     preds = [pred.strip() for pred in preds]
     return preds
 
+running = True
+
+
 def object_detection():
     """Run object detection with distance sensing."""
+    global running
     camera = setup_camera()
-    
-    while True:
+    previous_time = 0
+    while running:
         frame = camera.capture_array()
-        
+        current_time = time.time()
         # Perform object detection
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result, objectInfo = getObjects(frame, 0.45, 0.2)
@@ -146,9 +155,12 @@ def object_detection():
             
             # Alert if object is too close
             if distance < 50:
-                cv2.putText(result, "WARNING: Object too close!", (10, 60),
+                if current_time - previous_time >= 2:
+                    previous_time = current_time
+                    cv2.putText(result, "WARNING: Object too close!", (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                speak("Warning: Object too close!")
+                           
+                    speak("Warning: Object too close!")
         
         cv2.imshow("Object Detection", result)
         
@@ -195,6 +207,26 @@ def speak(text):
     """Send text to Windows for speech output"""
     send_audio_text(text)
     print(f"Speaking: {text}")
+
+def listen_during_objectDetection():
+    global running
+    while running:
+        command = listen()
+        if "bye" or "goodbye" in command:
+            running = False
+
+def detect_object():
+    listen_thread = threading.Thread(target=listen_during_objectDetection)
+    listen_thread.daemon = True
+    listen_thread.start()
+
+    object_detection()
+    
+    global running
+    running = False
+
+    listen_thread.join(timeout = 1)
+
 
 def listen():
     """Listen for commands from Windows client"""
@@ -267,6 +299,36 @@ def setup_socket_server(port=12345):
             server_socket.close()
         return False
 
+def ai():
+    API_KEY = "AIzaSyDoAcbWpDqkMfmY-79CNzJBxZUQzgP3pQ0"
+    Genai.configure(api_key=API_KEY)
+    Genai.GenerationConfig(max_output_tokens=200)
+    speak("Chat enabled")
+    # Initialize co
+    model = Genai.GenerativeModel()
+    conversation = model.start_chat()
+    while True:
+    # Get user input as text through speech recognition
+        user_input = listen().lower()
+        if user_input is None:
+          continue
+        if("close chat" in user_input):
+           speak("Chat closed.")
+           return
+        # Send user input to Gemini and get response
+        response = conversation.send_message(user_input)
+        # Assuming response is the GenerateContentResponse object
+        if response:
+        # Extract the generated content from the result
+            generated_content = response.text
+            html = markdown2.markdown(generated_content)
+            soup = BeautifulSoup(html, 'html.parser')
+            print(soup.get_text())
+            speak(soup.get_text())
+        else:
+            speak("Connection not established.")
+        
+
 def main():
     global client_socket, server_socket
     try:
@@ -277,7 +339,6 @@ def main():
         speak("Hello! How can I assist you today?")
         while True:
             query = listen().lower()
-            print(query)
             
             if "hello" in query:
                 speak("Hello, are you lost? Let me help you.")
@@ -293,7 +354,9 @@ def main():
                 send_email("Help Needed", "I need assistance.", "kartik134yadav@gmail.com")
             elif "activate object" in query:
                 speak("Activating object detection")
-                object_detection()
+                detect_object()
+            elif "open chat" in query:
+                ai()
             elif "goodbye" in query or "good bye" in query:
                 speak("Goodbye!")
                 break
